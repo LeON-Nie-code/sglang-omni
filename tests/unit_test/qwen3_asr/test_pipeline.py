@@ -691,8 +691,16 @@ def test_qwen3_asr_stage_import_without_dflash() -> None:
     )
 
 
+@pytest.mark.parametrize(
+    ("hidden_dimensions", "draft_vocabulary_tokens"),
+    [(1024, 48000), (2048, 32000)],
+    ids=["0.6b", "1.7b"],
+)
 def test_qwen3_asr_dflash_build_uses_sync_runtime_and_cleans_resources(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    hidden_dimensions: int,
+    draft_vocabulary_tokens: int,
 ) -> None:
     """DFlash must release its temporary checkpoint after both successful and failed builds."""
     # note (WilsonZheng0327): Only DFlash tests require the Triton-dependent worker.
@@ -706,12 +714,12 @@ def test_qwen3_asr_dflash_build_uses_sync_runtime_and_cleans_resources(
         "sample_from_anchor": False,
         "sliding_window_non_causal": False,
         "dtype": "bfloat16",
-        "draft_vocab_size": 32000,
+        "draft_vocab_size": draft_vocabulary_tokens,
         "aux_hidden_state_layer_ids": [2, 14, 25],
         "mask_token_id": 151705,
         "block_size": 8,
         "transformer_layer_config": {
-            "hidden_size": 2048,
+            "hidden_size": hidden_dimensions,
             "vocab_size": 151936,
         },
     }
@@ -731,7 +739,8 @@ def test_qwen3_asr_dflash_build_uses_sync_runtime_and_cleans_resources(
             "block_size": 8,
             "sample_from_anchor": False,
         }
-        assert config["draft_vocab_size"] == 32000
+        assert config["draft_vocab_size"] == draft_vocabulary_tokens
+        assert config["hidden_size"] == hidden_dimensions
         assert (
             draft_path / "model.safetensors"
         ).resolve() == tmp_path / "model.safetensors"

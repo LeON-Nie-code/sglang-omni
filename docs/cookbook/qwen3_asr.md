@@ -172,6 +172,73 @@ sgl-omni serve \
 
 DFlash requires greedy decoding (`temperature=0`), uses synchronous scheduling, and retains CUDA graphs. Realtime sessions are not validated.
 
+### Qwen3-ASR-0.6B on L4
+
+Use the matching 0.6B draft profile and pin the target checkpoint:
+
+```bash
+ASR_0_6B_MODEL_PATH="$(
+  hf download Qwen/Qwen3-ASR-0.6B \
+    --revision 5eb144179a02acc5e5ba31e748d22b0cf3e303b0 \
+    --quiet
+)"
+sgl-omni serve \
+  --config examples/configs/qwen3_asr_0_6b_dflash.yaml \
+  --model-path "${ASR_0_6B_MODEL_PATH}" \
+  --model-name Qwen/Qwen3-ASR-0.6B \
+  --port 8000
+```
+
+The profile pins the draft revision, uses BF16, allows eight running requests, and sets `mem_fraction_static=0.65`. The engine's `enable_torch_compile` is false; target prefill, target verification, and draft verification CUDA graphs remain enabled.
+
+Validation used one NVIDIA L4 (23,034 MiB), 12 CPU threads for the ASR worker, SGLang 0.5.22, PyTorch 2.14.1+cu130, and Transformers 5.19.0. The host driver was 550.163.01 with application-local `cuda-compat-13-0` 580.65.06 libraries and a CUDA 13.0.88 compiler. These compatibility libraries were selected for the validation process without replacing the host driver.
+
+The comparison used the first 128 English and 64 Chinese reference clips from SeedTTS revision `27f4c1adee83b5b29b7c4b375f6b976324bda308`. Four fresh-server visits ran in baseline → DFlash → DFlash → baseline order. Each visit discarded one warmup pass and measured two repeats at each concurrency. The baseline retained asynchronous decoding; DFlash selected synchronous decoding. Both modes used BF16, FlashInfer language-model attention, Triton audio attention, disabled radix caching, and a pre-LM cache limited to one entry. Torch compilation was disabled in both modes to match this L4 profile, so this is not a comparison against the unmodified default serving configuration. All 4,608 timed requests completed successfully.
+
+Throughput is the mean of four timed repeats per mode; WER is the observed range in percent. Chinese scoring uses character-level normalization.
+
+| Language | Concurrency | Baseline req/s | DFlash req/s | Speedup | Baseline WER (%) | DFlash WER (%) |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| EN | 1 | 8.97 | 18.42 | 2.05x | 0.896 | 0.896 |
+| EN | 4 | 24.19 | 43.22 | 1.79x | 1.135–1.374 | 0.896–1.135 |
+| EN | 8 | 39.65 | 59.69 | 1.51x | 1.135–1.493 | 1.016–1.374 |
+| ZH | 1 | 11.71 | 19.70 | 1.68x | 0.430 | 0.430 |
+| ZH | 4 | 35.05 | 53.41 | 1.52x | 0.430 | 0.430 |
+| ZH | 8 | 48.33 | 74.88 | 1.55x | 0.430 | 0.430 |
+
+Normalized transcripts matched the baseline for every tested clip at concurrency one, and for all tested Chinese clips at every concurrency. Some English transcripts differed at concurrency four and eight; at concurrency eight, one clip produced a normalized variant not seen across the baseline visits. The table reports the observed WER range for each concurrency. These scores do not establish token-for-token equivalence or isolate the source of the differences. The subset covers short offline recordings; long recordings, realtime input sessions, concurrency above eight, and default-on eligibility are not validated. Peak device memory during the timed runs was 18,020 MiB with DFlash and 17,238 MiB without it.
+
+To reproduce the English sweep with the existing benchmark, add `--asr.factory.pre_lm_cache_max_entries 1 --asr.engine.disable_radix_cache true` to the server command above, then run:
+
+```bash
+python -m benchmarks.eval.benchmark_asr_seedtts \
+  --port 8000 --model-path Qwen/Qwen3-ASR-0.6B \
+  --model-revision 5eb144179a02acc5e5ba31e748d22b0cf3e303b0 \
+  --dataset-revision 27f4c1adee83b5b29b7c4b375f6b976324bda308 \
+  --lang en --max-samples 128 \
+  --concurrencies 1,4,8 --repeats 2 --warmup \
+  --save-raw-dir asr_0_6b_dflash_raw \
+  --output asr_0_6b_dflash_results.json
+```
+
+Use `--lang zh --max-samples 64` for the Chinese subset. Restart the server for each visit. Launch the baseline with the same settings:
+
+```bash
+sgl-omni serve \
+  --model-path "${ASR_0_6B_MODEL_PATH}" \
+  --model-name Qwen/Qwen3-ASR-0.6B \
+  --asr.factory.dtype bfloat16 \
+  --asr.factory.enable_async_decode true \
+  --asr.factory.pre_lm_cache_max_entries 1 \
+  --asr.engine.max_running_requests 8 \
+  --asr.engine.mem_fraction_static 0.65 \
+  --asr.engine.enable_torch_compile false \
+  --asr.engine.disable_radix_cache true \
+  --port 8000
+```
+
+Non-greedy requests remain unsupported; the current server returns HTTP 500 with a greedy-only error, tracked under the request-refusal housekeeping item in [the speculative decoding roadmap](https://github.com/sgl-project/sglang-omni/issues/2941).
+
 ## Transcribe Audio
 
 ```bash

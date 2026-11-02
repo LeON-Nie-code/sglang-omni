@@ -1,0 +1,17 @@
+# DFlash speculative decoding validated on one L4 (SM89, 23,034 MiB).
+config_cls: Qwen3ASRPipelineConfig
+name: qwen3-asr-0.6b-dflash
+model_path: Qwen/Qwen3-ASR-0.6B
+
+stages:
+  asr:
+    factory:
+      dtype: bfloat16
+    engine:
+      max_running_requests: 8
+      mem_fraction_static: 0.65
+      enable_torch_compile: false
+      speculative_algorithm: DFLASH
+      speculative_draft_model_path: wilsonzheng0327/Qwen3-ASR-0.6B-dflash
+      speculative_draft_model_revision: fbf0ce97e3b76d8cd9f3da1791a8872c3d4c3a45
+      speculative_num_draft_tokens: 8
